@@ -53,9 +53,12 @@ class Config:
     request_timeout: int = _env_int("RAG_TIMEOUT", 180)
 
     # --- Chunking ----------------------------------------------------------
-    # Sizes are in characters. ~1200 chars is roughly 300 tokens.
-    chunk_size: int = _env_int("RAG_CHUNK_SIZE", 1200)
-    chunk_overlap: int = _env_int("RAG_CHUNK_OVERLAP", 180)
+    # Sizes are in CHARACTERS, and character density varies enormously by
+    # script: 500 Japanese characters is roughly 400 tokens, while 500 French
+    # characters is closer to 130. These defaults target Japanese.
+    # For Latin-script documents, use 1200 / 180 instead.
+    chunk_size: int = _env_int("RAG_CHUNK_SIZE", 500)
+    chunk_overlap: int = _env_int("RAG_CHUNK_OVERLAP", 80)
 
     # --- Retrieval ---------------------------------------------------------
     top_k: int = _env_int("RAG_TOP_K", 5)
