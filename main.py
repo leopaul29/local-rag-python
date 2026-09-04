@@ -144,6 +144,9 @@ def _build_retriever(config: Config) -> Retriever:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Local RAG over personal documents")
+    parser.add_argument(
+        "--debug", action="store_true", help="Print the full traceback on error"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     ingest = subparsers.add_parser("ingest", help="Build the index from documents")
@@ -179,7 +182,15 @@ def main() -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        # str(KeyError) prints only the key name, which is useless on its own.
+        # Always show the exception type, and the full traceback on --debug.
+        if getattr(args, "debug", False):
+            import traceback
+
+            traceback.print_exc()
+        else:
+            print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            print("Re-run with --debug for the full traceback.", file=sys.stderr)
         return 1
 
 
