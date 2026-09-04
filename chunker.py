@@ -3,6 +3,11 @@
 Strategy: never cut in the middle of a paragraph if it can be avoided.
 Paragraphs are accumulated until the size limit is reached; only oversized
 paragraphs are split further, on sentence boundaries.
+
+Japanese-aware: Japanese sentences end with 。！？ and are NOT followed by
+whitespace, and Japanese has no spaces between words. Both the sentence
+splitter and the overlap logic handle that explicitly, while still working
+on Latin-script text.
 """
 
 from __future__ import annotations
@@ -13,7 +18,17 @@ from typing import Iterable
 
 from loaders import RawDocument
 
-_SENTENCE_END = re.compile(r"(?<=[.!?;:])\s+")
+# Japanese sentence terminators. Note that 、 is a comma, not a terminator.
+JA_SENTENCE_END = "。．！？"
+# Closing marks that belong to the sentence they follow: 「これだ。」
+CLOSING_MARKS = "」』）】〉》＞”’\"')"
+# Latin terminators only end a sentence when whitespace follows, so that
+# "3.5" or "M. Dupont" is not treated as a sentence break.
+LATIN_SENTENCE_END = ".!?;:"
+
+# Chunks shorter than this are dropped as noise. Japanese is information
+# dense, so the floor is low on purpose.
+MIN_CHUNK_CHARS = 20
 
 
 @dataclass
@@ -31,27 +46,71 @@ class Chunk:
         return asdict(self)
 
 
+def split_sentences(text: str) -> list[str]:
+    """Split text into sentences, Japanese and Latin alike.
+
+    Each returned sentence keeps its own trailing whitespace, so the caller
+    can concatenate sentences back together without inserting spaces that
+    do not belong in Japanese.
+    """
+    sentences: list[str] = []
+    start = 0
+    index = 0
+    length = len(text)
+
+    while index < length:
+        char = text[index]
+
+        # Japanese: terminator alone is enough, no whitespace required
+        if char in JA_SENTENCE_END:
+            end = index + 1
+            # Keep trailing quotes and brackets attached: 「そうだ。」
+            while end < length and text[end] in CLOSING_MARKS:
+                end += 1
+            while end < length and text[end].isspace():
+                end += 1
+            sentences.append(text[start:end])
+            start = index = end
+            continue
+
+        # Latin: terminator must be followed by whitespace
+        if char in LATIN_SENTENCE_END and index + 1 < length and text[index + 1].isspace():
+            end = index + 1
+            while end < length and text[end].isspace():
+                end += 1
+            sentences.append(text[start:end])
+            start = index = end
+            continue
+
+        index += 1
+
+    if start < length:
+        sentences.append(text[start:])
+
+    return [s for s in sentences if s.strip()]
+
+
 def _split_oversized(paragraph: str, chunk_size: int) -> list[str]:
-    """Break a paragraph that is longer than chunk_size into sentence groups."""
-    sentences = _SENTENCE_END.split(paragraph)
+    """Break a paragraph longer than chunk_size into groups of sentences."""
     pieces: list[str] = []
     buffer = ""
 
-    for sentence in sentences:
+    for sentence in split_sentences(paragraph):
         # A single sentence longer than the limit gets a hard character cut
         if len(sentence) > chunk_size:
-            if buffer:
+            if buffer.strip():
                 pieces.append(buffer.strip())
                 buffer = ""
             for start in range(0, len(sentence), chunk_size):
                 pieces.append(sentence[start : start + chunk_size].strip())
             continue
 
-        if len(buffer) + len(sentence) + 1 > chunk_size:
+        if buffer and len(buffer) + len(sentence) > chunk_size:
             pieces.append(buffer.strip())
             buffer = sentence
         else:
-            buffer = f"{buffer} {sentence}".strip()
+            # No separator added: sentences already carry their own spacing
+            buffer += sentence
 
     if buffer.strip():
         pieces.append(buffer.strip())
@@ -59,12 +118,28 @@ def _split_oversized(paragraph: str, chunk_size: int) -> list[str]:
 
 
 def _tail(text: str, overlap: int) -> str:
-    """Take the last `overlap` characters, snapped to a word boundary."""
+    """Take the last `overlap` characters to prepend to the next chunk.
+
+    Preference order: restart at a sentence boundary, then at a word
+    boundary, then anywhere. Japanese has no spaces, so the raw cut is the
+    normal outcome there and is harmless.
+    """
     if overlap <= 0 or len(text) <= overlap:
         return text
+
     tail = text[-overlap:]
+
+    for index, char in enumerate(tail[:-1]):
+        if char in JA_SENTENCE_END:
+            candidate = tail[index + 1 :].lstrip("".join(CLOSING_MARKS)).lstrip()
+            if candidate:
+                return candidate
+
     space = tail.find(" ")
-    return tail[space + 1 :] if space != -1 else tail
+    if space != -1:
+        return tail[space + 1 :]
+
+    return tail
 
 
 def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
@@ -94,7 +169,7 @@ def split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     if buffer.strip():
         chunks.append(buffer.strip())
 
-    return [c for c in chunks if len(c) > 40]  # drop near-empty fragments
+    return [c for c in chunks if len(c) >= MIN_CHUNK_CHARS]
 
 
 def chunk_documents(
