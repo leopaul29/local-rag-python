@@ -38,10 +38,10 @@ Everything is an environment variable, no file editing required.
 | `RAG_LLM_BACKEND` | `ollama` | `openai` for llama.cpp / vLLM / LM Studio |
 | `RAG_LLM_MODEL` | `qwen2.5:7b` | |
 | `RAG_LLM_URL` | `http://localhost:11434/api/chat` | |
-| `RAG_CHUNK_SIZE` | `1200` | Characters (~300 tokens) |
-| `RAG_CHUNK_OVERLAP` | `180` | |
+| `RAG_CHUNK_SIZE` | `500` | Characters. Tuned for Japanese — use `1200` for Latin scripts |
+| `RAG_CHUNK_OVERLAP` | `80` | Use `180` for Latin scripts |
 | `RAG_TOP_K` | `5` | |
-| `RAG_MIN_SCORE` | `0.25` | Relevance cutoff |
+| `RAG_MIN_SCORE` | `0.25` | Relevance cutoff — **model-dependent, see below** |
 
 ### Non-Ollama server
 
@@ -52,9 +52,33 @@ export RAG_EMBED_BACKEND=openai
 export RAG_EMBED_URL=http://192.168.1.50:8080/v1/embeddings
 ```
 
-### e5 embedding models
+## Japanese
 
-They require asymmetric prefixes:
+The loader, chunker and keyword matcher all handle Japanese:
+
+- sentences split on `。！？` with no whitespace, keeping `「…」` attached
+- hard-wrapped lines from Japanese PDFs are rejoined
+- no spaces are inserted when reassembling sentences
+- chunk overlap restarts at a sentence boundary
+- keyword matching uses character bigrams, since `\w+` would swallow a whole
+  clause as a single token and never match
+
+### Embedding model
+
+`bge-m3` is multilingual and decent on Japanese — the zero-setup default.
+Japanese-specialized models score higher on JMTEB:
+
+```bash
+pip install sentence-transformers
+export RAG_EMBED_BACKEND=sentence-transformers
+export RAG_EMBED_MODEL=cl-nagoya/ruri-v3-310m
+```
+
+**Ruri requires Japanese prefixes.** Check the exact strings on the model
+card and set `RAG_QUERY_PREFIX` / `RAG_PASSAGE_PREFIX` accordingly —
+omitting them fails silently and costs real accuracy.
+
+For the e5 family:
 
 ```bash
 export RAG_EMBED_MODEL=intfloat/multilingual-e5-large
@@ -62,6 +86,15 @@ export RAG_EMBED_BACKEND=sentence-transformers
 export RAG_QUERY_PREFIX="query: "
 export RAG_PASSAGE_PREFIX="passage: "
 ```
+
+### Calibrate min_score per model
+
+Similarity scores are not comparable across models. e5 and ruri push most
+pairs into the 0.7–0.9 range, so the default `0.25` lets everything through
+and the threshold does nothing.
+
+Run `search` on a question you know is **not** covered by your documents,
+look at the top score, and set `RAG_MIN_SCORE` just above it.
 
 ## Tuning
 
