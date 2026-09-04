@@ -12,12 +12,37 @@ from config import Config
 from embedder import Embedder
 from store import SearchHit, VectorStore
 
-_WORD = re.compile(r"\w{4,}", re.UNICODE)
+_LATIN_WORD = re.compile(r"[0-9A-Za-zÀ-ÿ]{4,}")
+_CJK_RUN = re.compile(
+    r"[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uff66-\uff9f]+"
+)
+_HIRAGANA_ONLY = re.compile(r"^[\u3040-\u309f]+$")
 
 
 def _keywords(text: str) -> set[str]:
-    """Content words only. The length filter is a cheap stopword remover."""
-    return {w.lower() for w in _WORD.findall(text)}
+    """Extract comparable units from a text, in any script.
+
+    Japanese has no spaces, so `\\w+` would swallow a whole clause as one
+    token and the overlap between question and chunk would almost always be
+    empty. Character bigrams are the standard dependency-free workaround:
+    「請求書」 becomes {請求, 求書}, which still matches inside a longer
+    compound. Latin words keep the simple length filter.
+    """
+    text = text.lower()
+    keywords = set(_LATIN_WORD.findall(text))
+
+    for run in _CJK_RUN.findall(text):
+        if len(run) == 1:
+            keywords.add(run)
+            continue
+        for start in range(len(run) - 1):
+            bigram = run[start : start + 2]
+            # Pure-hiragana bigrams are mostly grammar (です, ます, という).
+            # Drop them the way stopwords are dropped in Latin text.
+            if not _HIRAGANA_ONLY.match(bigram):
+                keywords.add(bigram)
+
+    return keywords
 
 
 class Retriever:
