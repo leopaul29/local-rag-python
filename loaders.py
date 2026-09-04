@@ -13,6 +13,12 @@ from typing import Iterator
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".markdown"}
 
+# CJK punctuation, kana, kanji and full-width forms
+_CJK_CHAR = (
+    r"[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff"
+    r"\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef]"
+)
+
 
 @dataclass
 class RawDocument:
@@ -31,6 +37,13 @@ def _clean(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     # Repair words split across line breaks by PDF extraction ("exam-\nple")
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+    # Japanese PDFs hard-wrap mid-sentence and the break carries no meaning.
+    # Join a single newline when CJK text sits on both sides. Blank lines are
+    # untouched, so paragraph boundaries survive.
+    # Numbers and latin words are common inside Japanese sentences
+    # (合計は\n125,000円), so accept them on either side of the break.
+    text = re.sub(rf"(?<={_CJK_CHAR})\n(?={_CJK_CHAR}|[0-9A-Za-z])", "", text)
+    text = re.sub(rf"(?<=[0-9A-Za-z])\n(?={_CJK_CHAR})", "", text)
     return text.strip()
 
 
